@@ -1,5 +1,7 @@
+using System.Data.Common;
 using Application01_GitAction_Deployment.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Application01_GitAction_Deployment
 {
@@ -9,25 +11,27 @@ namespace Application01_GitAction_Deployment
         {
             var builder = WebApplication.CreateBuilder(args);
 
-            builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+            // Logging
+            builder.Logging.ClearProviders();
+            builder.Logging.AddConsole();
 
-            // Add services to the container.
+            // EF Core
+            builder.Services.AddDbContext<AppDbContext>(options =>
+                options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+            // MVC
             builder.Services.AddControllersWithViews();
 
             var app = builder.Build();
 
-            // Configure the HTTP request pipeline.
             if (!app.Environment.IsDevelopment())
             {
                 app.UseExceptionHandler("/Home/Error");
-                // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
                 app.UseHsts();
             }
 
             app.UseHttpsRedirection();
             app.UseRouting();
-
             app.UseAuthorization();
 
             app.MapStaticAssets();
@@ -36,12 +40,30 @@ namespace Application01_GitAction_Deployment
                 pattern: "{controller=Home}/{action=Index}/{id?}")
                 .WithStaticAssets();
 
+            // Apply EF migrations with detailed logging
             using (var scope = app.Services.CreateScope())
             {
-                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>(); // or any other suitable and meaningful name
-                db.Database.Migrate();
-            }
+                var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+                try
+                {
+                    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    DbConnection conn = db.Database.GetDbConnection();
+                    conn.Open();
 
+                    logger.LogInformation("SQL connected. DataSource={DataSource}, Database={Database}, ServerVersion={ServerVersion}",
+                        conn.DataSource, conn.Database, conn.ServerVersion);
+
+                    logger.LogInformation("Applying EF Core migrations...");
+                    db.Database.Migrate();
+                    logger.LogInformation("EF Core migrations applied successfully.");
+                }
+                catch (Exception ex)
+                {
+                    var msg = ex.InnerException?.Message ?? ex.Message;
+                    var st = ex.StackTrace ?? string.Empty;
+                    logger.LogError(ex, "EF migration failed at startup. Error={Message}\n{StackTrace}", msg, st);
+                }
+            }
 
             app.Run();
         }
